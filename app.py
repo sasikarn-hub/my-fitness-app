@@ -156,21 +156,8 @@ st.markdown("- 🟩 **สีเขียว (PERFECT FORM):** ทำดีแล
 st.markdown("- 🟥 **สีแดง (คำเตือน):** มีข้อผิดพลาด ให้ทำตามคำสั่งที่ขึ้นบนจอทันที")
 
 webrtc_streamer(
-    key="fitness-pro-ipad",
+    key="fitness-coach",
     video_processor_factory=FitnessProcessor,
-    # 1. เพิ่มเซิร์ฟเวอร์ช่วยเชื่อมต่อ (Turn/Stun) ให้ iPad หาเครื่องเราเจอ
-    rtc_configuration={
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-    },
-    # 2. บังคับขนาดภาพให้เล็กลง เพื่อไม่ให้เครื่องโหลดหนักจนจอดำ
-    media_stream_constraints={
-        "video": {
-            "width": {"ideal": 480},
-            "height": {"ideal": 360},
-            "frameRate": {"ideal": 15}
-        },
-        "audio": False
-    },
-    # 3. ใส่พารามิเตอร์ส่งข้อมูลแบบ async
-    async_processing=True,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    media_stream_constraints={"video": True, "audio": False}
 )
