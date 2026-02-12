@@ -9,10 +9,9 @@ from ultralytics import YOLO
 try:
     model = YOLO('yolov8n-pose.pt')
 except Exception as e:
-    st.error("ไม่พบไฟล์ yolov8n-pose.pt ใน GitHub ของคุณ")
+    st.error("ไม่พบไฟล์ yolov8n-pose.pt ใน GitHub")
     st.stop()
 
-# ฟังก์ชันคำนวณมุม (3 จุด)
 def calculate_angle(a, b, c):
     a = np.array(a); b = np.array(b); c = np.array(c)
     radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
@@ -20,7 +19,6 @@ def calculate_angle(a, b, c):
     if angle > 180.0: angle = 360-angle
     return angle
 
-# ตัวแปร Global เพื่อส่งค่าจาก Dropdown ไปหา Class AI
 if 'exercise_mode' not in st.session_state:
     st.session_state['exercise_mode'] = "Standing Bicep Curl"
 
@@ -30,143 +28,135 @@ class FitnessProcessor(VideoTransformerBase):
         self.set_count = 0
         self.stage = "down"
         self.reps_per_set = 10
-        self.warning_msg = "" # ข้อความเตือน
+        self.feedback = "READY?"  # ข้อความคำแนะนำ
+        self.color = (255, 255, 0) # สีข้อความ (เริ่มต้นสีฟ้า)
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
-        
-        # รับค่าท่าที่เลือกจาก Session State
         mode = st.session_state.get('exercise_mode', "Standing Bicep Curl")
-
         results = model(img, verbose=False, conf=0.5)
         
         try:
             keypoints = results[0].keypoints.data[0].cpu().numpy()
             
-            # ตรวจจับร่างกายซีกขวา (AI มองเป็นซ้ายของภาพ)
-            # 6=ไหล่ขวา, 8=ศอกขวา, 10=ข้อมือขวา, 12=เอวขวา
-            # เราใช้ซีกขวาเป็นหลัก (หรือจะแก้ให้ detect ทั้งสองข้างก็ได้)
-            p_shoulder = keypoints[6][:2]
-            p_elbow = keypoints[8][:2]
-            p_wrist = keypoints[10][:2]
-            p_hip = keypoints[12][:2]
+            # จุดร่างกาย (ใช้ซีกขวา)
+            p_sh = keypoints[6][:2]  # ไหล่
+            p_el = keypoints[8][:2]  # ศอก
+            p_wr = keypoints[10][:2] # ข้อมือ
+            p_hip = keypoints[12][:2] # เอว
 
-            # เช็คความมั่นใจของจุดต่างๆ (ต้องเห็นชัด)
+            # เช็คว่าเห็นคนชัดไหม
             if keypoints[6][2] > 0.5 and keypoints[8][2] > 0.5:
                 
-                # --- LOGIC 1: Bicep Curl (พับแขน) ---
+                # =========================================
+                # 1. BICEP CURL (พับแขน)
+                # =========================================
                 if mode == "Standing Bicep Curl":
-                    # มุมข้อศอก (ไหล่-ศอก-ข้อมือ)
-                    angle = calculate_angle(p_shoulder, p_elbow, p_wrist)
+                    angle = calculate_angle(p_sh, p_el, p_wr)
                     
-                    # Cheat Check: ตัวโยก? (เช็คไหล่เทียบกับเอวในแนวแกน X)
-                    # ถ้าไหล่ขยับหนีเอวมากเกินไป = เหวี่ยง
-                    shoulder_sway = abs(p_shoulder[0] - p_hip[0])
-                    if shoulder_sway > 50: # ค่าสมมติ ปรับได้
-                        self.warning_msg = "!! DON'T SWING !!"
+                    # ตรวจสอบการเหวี่ยง (ระยะห่างไหล่กับเอวในแนวราบ)
+                    sway = abs(p_sh[0] - p_hip[0])
+                    
+                    # --- Logic แจ้งเตือนวิธีแก้ ---
+                    if sway > 40: # ถ้าตัวโยก
+                        self.feedback = "LOCK YOUR BACK!" # วิธีแก้: ล็อกหลังให้ตรง
+                        self.color = (0, 0, 255) # สีแดง
+                    elif p_el[1] < p_sh[1]: # ถ้าศอกยกสูงกว่าไหล่
+                        self.feedback = "KEEP ELBOWS DOWN!" # วิธีแก้: กดศอกลง
+                        self.color = (0, 0, 255)
                     else:
-                        self.warning_msg = ""
+                        self.feedback = "PERFECT FORM" # ชมเชย
+                        self.color = (0, 255, 0) # สีเขียว
 
-                    # Counting Logic
+                    # นับจำนวน
                     if angle > 160: self.stage = "down"
                     if angle < 30 and self.stage == "down":
                         self.stage = "up"
                         self.counter += 1
 
-                # --- LOGIC 2: Upright Row (ดึงข้อศอก) ---
+                # =========================================
+                # 2. UPRIGHT ROW (ดึงศอก)
+                # =========================================
                 elif mode == "Standing Upright Row":
-                    # วัดมุมรักแร้ (ศอก-ไหล่-เอว) เพื่อดูการยกแขน
-                    arm_body_angle = calculate_angle(p_elbow, p_shoulder, p_hip)
-                    
-                    # Cheat Check: ศอกสูงเกินไหล่? (เสี่ยงไหล่หนีบ)
-                    # ถ้าค่า Y ของศอก น้อยกว่า ไหล่ (ในภาพ Y น้อย = อยู่สูงกว่า)
-                    if p_elbow[1] < p_shoulder[1]: 
-                        self.warning_msg = "!! ELBOW TOO HIGH !!"
+                    # ตรวจศอกสูงเกินไหล่? (ในภาพแกน Y น้อย = สูง)
+                    # ให้ศอกสูงกว่าไหล่ได้นิดหน่อย แต่ห้ามเกินหู (ให้ buffer 20px)
+                    if p_el[1] < p_sh[1] - 30: 
+                        self.feedback = "LOWER YOUR ELBOWS!" # วิธีแก้: ลดศอกลง
+                        self.color = (0, 0, 255)
+                    elif p_wr[0] < p_sh[0] - 50: # ข้อมือแคบเกินไป
+                        self.feedback = "WIDEN YOUR GRIP!" # วิธีแก้: จับกว้างขึ้น
+                        self.color = (0, 0, 255)
                     else:
-                        self.warning_msg = ""
+                        self.feedback = "GOOD SQUEEZE"
+                        self.color = (0, 255, 0)
 
-                    # Counting Logic (ดูความสูงข้อมือเทียบเอว/อก)
-                    # ลง: ข้อมืออยู่ต่ำกว่าเอว
-                    if p_wrist[1] > p_hip[1]: 
-                        self.stage = "down"
-                    # ขึ้น: ข้อมืออยู่สูงระดับอก (และเคยลงมาก่อน)
-                    if p_wrist[1] < p_shoulder[1] + 50 and self.stage == "down": 
+                    # นับจำนวน
+                    if p_wr[1] > p_hip[1]: self.stage = "down"
+                    if p_wr[1] < p_sh[1] + 50 and self.stage == "down": 
                         self.stage = "up"
                         self.counter += 1
 
-                # --- LOGIC 3: Front Raise (ยกแขนหน้า) ---
+                # =========================================
+                # 3. FRONT RAISE (ยกแขนหน้า)
+                # =========================================
                 elif mode == "Standing Front Raise":
-                    # วัดมุมรักแร้ (ศอก-ไหล่-เอว)
-                    arm_angle = calculate_angle(p_elbow, p_shoulder, p_hip)
+                    arm_angle = calculate_angle(p_el, p_sh, p_hip)
                     
-                    # Cheat Check: ยกสูงเกิน 90 องศา?
-                    if arm_angle > 100:
-                        self.warning_msg = "!! TOO HIGH (STOP AT 90) !!"
-                    # Cheat Check: เอนหลัง? (ไหล่เลยเอวไปด้านหลัง)
-                    elif p_shoulder[0] < p_hip[0] - 30: 
-                        self.warning_msg = "!! DON'T LEAN BACK !!"
+                    if arm_angle > 100: # ยกสูงเกิน 90 องศา
+                        self.feedback = "STOP AT EYE LEVEL!" # วิธีแก้: หยุดแค่ระดับตา
+                        self.color = (0, 0, 255)
+                    elif p_sh[0] < p_hip[0] - 30: # เอนหลัง
+                        self.feedback = "STAND STRAIGHT!" # วิธีแก้: ยืนตัวตรง
+                        self.color = (0, 0, 255)
                     else:
-                        self.warning_msg = ""
+                        self.feedback = "NICE CONTROL"
+                        self.color = (0, 255, 0)
 
-                    # Counting Logic
+                    # นับจำนวน
                     if arm_angle < 20: self.stage = "down"
-                    if arm_angle > 85 and arm_angle < 100 and self.stage == "down":
+                    if arm_angle > 80 and arm_angle < 100 and self.stage == "down":
                         self.stage = "up"
                         self.counter += 1
 
-                # --- ส่วนจัดการ Set ---
+                # --- จัดการ Set ---
                 if self.counter >= self.reps_per_set:
                     self.set_count += 1
                     self.counter = 0
 
-                # --- HUD Display ---
-                # กล่องดำพื้นหลัง
-                cv2.rectangle(img, (0, 0), (350, 200), (0, 0, 0), -1)
-                
-                # แสดง Mode
-                cv2.putText(img, f"MODE: {mode}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-                
-                # แสดง Warning (ถ้ามี)
-                if self.warning_msg:
-                    cv2.rectangle(img, (0, 200), (400, 250), (0, 0, 255), -1) # แถบแดง
-                    cv2.putText(img, self.warning_msg, (10, 235), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                # --- DRAW UI (วาดหน้าจอ) ---
+                # 1. แถบสถานะด้านบน (Feedback Bar)
+                cv2.rectangle(img, (0, 0), (640, 60), self.color, -1) # แถบสีพื้นหลัง
+                cv2.putText(img, self.feedback, (20, 45), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
 
-                # แสดง Reps/Sets
-                cv2.putText(img, f"REPS: {self.counter}/{self.reps_per_set}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
-                cv2.putText(img, f"SETS: {self.set_count}", (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                
-                # แสดงสถานะแขน
-                status_color = (0, 255, 255) if self.stage == "down" else (0, 0, 255)
-                cv2.putText(img, f"STATE: {self.stage}", (10, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
+                # 2. ข้อมูลจำนวนครั้ง (ด้านซ้ายล่าง)
+                cv2.rectangle(img, (0, 400), (200, 480), (0, 0, 0), -1)
+                cv2.putText(img, f"REPS: {self.counter}", (10, 440), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(img, f"SETS: {self.set_count}", (10, 470), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-        except Exception as e:
+        except Exception:
             pass
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# --- UI ส่วนหน้าเว็บ ---
-st.title("🏋️ AI Fitness Pro: 3 Dumbbell Moves")
+st.title("🏋️ AI Coach: Real-time Feedback")
 
-# สร้าง Dropdown สำหรับเลือกท่า
 option = st.selectbox(
     'เลือกท่าออกกำลังกาย:',
     ('Standing Bicep Curl', 'Standing Upright Row', 'Standing Front Raise')
 )
-
-# อัปเดต session state เพื่อส่งค่าไปให้ AI
 st.session_state['exercise_mode'] = option
 
-# คำอธิบายท่า
-if option == 'Standing Bicep Curl':
-    st.info("💡 ทริค: ล็อกศอกให้นิ่ง อย่าโยกตัวช่วยเหวี่ยง")
-elif option == 'Standing Upright Row':
-    st.info("💡 ทริค: ดึงศอกแค่ระดับไหล่ (อย่าเกินหู) ระวังไหล่หนีบ")
-elif option == 'Standing Front Raise':
-    st.info("💡 ทริค: ยกแค่ระดับสายตา (90 องศา) อย่าแอ่นหลัง")
+st.write("---")
+st.write("**วิธีอ่านค่าบนหน้าจอ:**")
+st.markdown("- 🟩 **สีเขียว (PERFECT FORM):** ทำดีแล้ว ทำต่อไป!")
+st.markdown("- 🟥 **สีแดง (คำเตือน):** มีข้อผิดพลาด ให้ทำตามคำสั่งที่ขึ้นบนจอทันที")
 
 webrtc_streamer(
-    key="fitness-pro",
+    key="fitness-coach",
     video_processor_factory=FitnessProcessor,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     media_stream_constraints={"video": True, "audio": False}
