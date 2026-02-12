@@ -5,12 +5,11 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 from ultralytics import YOLO
 
-# 1. ลองโหลดโมเดล
+# โหลดโมเดล
 try:
-    # ปรับ confidence ให้น้อยลง (0.3) เพื่อให้จับคนง่ายขึ้น
     model = YOLO('yolov8n-pose.pt')
 except Exception as e:
-    st.error(f"โหลดโมเดลไม่สำเร็จ! เช็คไฟล์ yolov8n-pose.pt ใน GitHub ด่วน: {e}")
+    st.error("ไม่พบไฟล์ yolov8n-pose.pt ใน GitHub ของคุณ")
     st.stop()
 
 def calculate_angle(a, b, c):
@@ -22,52 +21,73 @@ def calculate_angle(a, b, c):
 
 class FitnessProcessor(VideoTransformerBase):
     def __init__(self):
-        self.counter = 0
+        self.counter = 0        # นับจำนวนครั้ง
+        self.set_count = 0      # นับจำนวนเซต
         self.stage = "down"
+        self.reps_per_set = 10  # เป้าหมายต่อเซต (แก้เลขตรงนี้ได้)
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
 
-        # สั่งให้ AI ทำงาน (ลดความเข้มงวดลงเหลือ 0.3)
-        results = model(img, verbose=False, conf=0.3)
+        # ให้ AI ทำงาน
+        results = model(img, verbose=False, conf=0.5)
         
-        # --- ส่วนสำคัญ: วาดเส้นกระดูกทับลงไปเลย (จะได้รู้ว่า AI เห็นไหม) ---
-        img = results[0].plot() 
-
         try:
             # ดึงข้อมูลจุดต่างๆ
             keypoints = results[0].keypoints.data[0].cpu().numpy()
             
-            # เช็คว่ามองเห็น ไหล่(5), ศอก(7), ข้อมือ(9) ครบไหม?
-            if keypoints[5][2] > 0.3 and keypoints[7][2] > 0.3 and keypoints[9][2] > 0.3:
-                p1 = keypoints[5][:2] # ไหล่
-                p2 = keypoints[7][:2] # ศอก
-                p3 = keypoints[9][:2] # ข้อมือ
+            # ตรวจสอบว่าเห็น ไหล่(5), ศอก(7), ข้อมือ(9) ไหม
+            if keypoints[5][2] > 0.5 and keypoints[7][2] > 0.5 and keypoints[9][2] > 0.5:
+                p1 = keypoints[5][:2]
+                p2 = keypoints[7][:2]
+                p3 = keypoints[9][:2]
 
+                # คำนวณมุมแขน
                 angle = calculate_angle(p1, p2, p3)
                 
-                # Logic นับ
-                if angle > 160: self.stage = "down"
-                if angle < 40 and self.stage == "down":
+                # --- Logic การนับ (ยกดัมเบล) ---
+                # แขนเหยียดตรง (>160 องศา) = ลงสุด
+                if angle > 160: 
+                    self.stage = "down"
+                
+                # แขนพับเข้ามา (<30 องศา) และเคยลงสุดมาก่อน = นับ 1
+                if angle < 30 and self.stage == "down":
                     self.stage = "up"
                     self.counter += 1
+                    
+                    # --- Logic ตัดรอบเซต ---
+                    if self.counter >= self.reps_per_set:
+                        self.set_count += 1   # เพิ่มจำนวนเซต
+                        self.counter = 0      # รีเซ็ตจำนวนครั้ง
                 
-                # แสดงสถานะ
-                cv2.putText(img, f"Angle: {int(angle)}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,0), 2)
-                cv2.putText(img, f"Count: {self.counter}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 2, (0,255,0), 4)
-            else:
-                 cv2.putText(img, "Show Arms Clearly!", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+                # --- แสดงผลหน้าจอ (UI แบบคลีนๆ) ---
+                # วาดกล่องพื้นหลังสีดำจางๆ ให้อ่านตัวเลขง่าย
+                cv2.rectangle(img, (0, 0), (250, 150), (0, 0, 0), -1)
+                
+                # แสดงจำนวนครั้ง (REPS)
+                cv2.putText(img, f"REPS: {self.counter}/{self.reps_per_set}", (10, 50), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                
+                # แสดงจำนวนเซต (SETS)
+                cv2.putText(img, f"SETS: {self.set_count}", (10, 100), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                
+                # แสดงสถานะ (ขึ้น/ลง)
+                status_color = (0, 255, 255) if self.stage == "down" else (0, 0, 255)
+                cv2.putText(img, f"STATE: {self.stage}", (10, 140), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 1)
 
-        except:
-            cv2.putText(img, "No Person Detected", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+        except Exception:
+            pass
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-st.title("🏋️ Test Mode: Debugging")
-st.write("ถ้าเห็นเส้นสีๆ ขีดทับตัวคน แปลว่า AI ทำงานแล้วครับ")
+st.title("💪 AI Fitness Trainer")
+st.write(f"เป้าหมาย: 10 ครั้ง = 1 เซต")
+
 webrtc_streamer(
-    key="fitness-debug",
+    key="fitness-clean",
     video_processor_factory=FitnessProcessor,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     media_stream_constraints={"video": True, "audio": False}
