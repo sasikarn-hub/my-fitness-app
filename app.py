@@ -156,8 +156,23 @@ st.markdown("- 🟩 **สีเขียว (PERFECT FORM):** ทำดีแล
 st.markdown("- 🟥 **สีแดง (คำเตือน):** มีข้อผิดพลาด ให้ทำตามคำสั่งที่ขึ้นบนจอทันที")
 
 webrtc_streamer(
-    key="fitness-coach",
+    key="fitness-coach-v2",
     video_processor_factory=FitnessProcessor,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    media_stream_constraints={"video": True, "audio": False}
+    # เพิ่มเซิร์ฟเวอร์สำรองเพื่อให้ iPad ทะลุระบบป้องกันเน็ตมือถือได้
+    rtc_configuration={
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun2.l.google.com:19302"]}
+        ]
+    },
+    media_stream_constraints={
+        "video": {
+            "width": {"ideal": 640},
+            "height": {"ideal": 480},
+            "frameRate": {"ideal": 20}
+        },
+        "audio": False
+    },
+    async_processing=True, # ช่วยให้ AI ไม่หน่วงบน iPad
 )
